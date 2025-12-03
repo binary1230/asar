@@ -52,8 +52,8 @@ bool asblock_65816(char** word, int numwords, bool fake, int& outlen)
 #define as_xy(  op, byte) if (is(op)) { if(!explicitlen && !hexconstant && !fake) asar_throw_warning(0, warning_id_implicitly_sized_immediate); if (len==1) { withlen(1); write1(byte); write1(num); } \
 																					 else { withlen(2); write1((unsigned int)byte); write2(num); } return true; }
 #define as_rep( op, byte) if (is(op)) { if (pass<2 && !fake) { num=getnum(par); } if(foundlabel) asar_throw_error(0, error_type_block, error_id_no_labels_here); withlen(0); for (unsigned int i=0;i<num;i++) { write1((unsigned int)byte); } recent_opcode_num = num; return true; }
-#define as_rel1(op, byte) if (is(op)) { return relative_addr(byte, num, false); }
-#define as_rel2(op, byte) if (is(op)) { return relative_addr(byte, num, true); }
+#define as_rel1(op, byte) if (is(op)) { return relative_addr(byte, num, false, fake, outlen); }
+#define as_rel2(op, byte) if (is(op)) { return relative_addr(byte, num, true, fake, outlen); }
 #define the8(offset, len) as##len("ORA", offset+0x00); as##len("AND", offset+0x20); as##len("EOR", offset+0x40); as##len("ADC", offset+0x60); \
 													as##len("STA", offset+0x80); as##len("LDA", offset+0xA0); as##len("CMP", offset+0xC0); as##len("SBC", offset+0xE0)
 #define thenext8(offset, len) as##len("ASL", offset+0x00); as##len("BIT", offset+0x1E); as##len("ROL", offset+0x20); as##len("LSR", offset+0x40); \
@@ -236,7 +236,7 @@ opAFallback:
 // TODO: maybe rehome this to a less CPU-specific place, if it's the same for other arch's like spc
 //
 // is_long: if true, 16bit mode (i.e. BRL). if false, 8bit mode (i.e. BRA)
-bool relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long)
+bool relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long, bool fake, int& outlen)
 {
 	int delta = (int)num;
 	if (foundlabel)
@@ -265,7 +265,13 @@ bool relative_addr(const unsigned int instruction, const unsigned int num, const
 		}
 	}
 
-	withlen(is_long ? 1 : 2);
+    int n = is_long ? 1 : 2;
+    // original macro
+    // withlen(n);
+    // manual expansion:
+    outlen=n;
+    if(fake)
+        return true;
 
 	write1(instruction);
 	if (is_long)
