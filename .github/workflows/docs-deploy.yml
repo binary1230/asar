@@ -3,7 +3,6 @@ on:
   push:
     branches:
       - asar_19
-      - fix_relative_addressing
     tags:
       - '*'
 

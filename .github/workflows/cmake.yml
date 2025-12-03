@@ -2,9 +2,9 @@ name: CMake
 
 on:
   push:
-    branches: [ master, asar_19, asar_2_beta ]
+    branches: [ master, asar_19, asar_2_beta, fix_relative_addressing ]
   pull_request:
-    branches: [ master, asar_19, asar_2_beta ]
+    branches: [ master, asar_19, asar_2_beta, fix_relative_addressing ]
 
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
