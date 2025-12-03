@@ -265,7 +265,7 @@ bool relative_addr(const unsigned int instruction, const unsigned int num, const
 		}
 	}
 
-    int n = is_long ? 1 : 2;
+    int n = !is_long ? 1 : 2;
     // original macro
     // withlen(n);
     // manual expansion:
