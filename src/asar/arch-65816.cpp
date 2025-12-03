@@ -16,7 +16,7 @@ void asend_65816()
 {
 }
 
-bool relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long, bool fake, int& outlen)
+bool relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long, bool fake, int& outlen);
 
 extern bool fastrom;
 extern int recent_opcode_num;
