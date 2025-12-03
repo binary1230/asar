@@ -243,27 +243,28 @@ bool relative_addr(const unsigned int instruction, const unsigned int num, const
 		delta -= snespos + (is_long ? 3 : 2);
 
 	if (pass == 2) {
-		// TODO: need to check if we need to do any of this stuff on passes other than 2 -Dom
+    		// TODO: need to check if we need to do any of this stuff on passes other than 2 -Dom
 
-		if (!foundlabel) {
-			if (delta & ~(is_long ? 0xFFFF : 0xFF))
-				asar_throw_error(pass, error_type_block, error_id_invalid_input,
-					(string("Relative address operand too large: ") + hex4((unsigned)delta)).data());
+    		if (!foundlabel) {
+    			if (delta & ~(is_long ? 0xFFFF : 0xFF))
+    				asar_throw_error(pass, error_type_block, error_id_invalid_input, (string("Relative address operand too large: ") + hex4((unsigned)delta)).data());
 
-			// Tricky:
-			// 1. Interpret our hex literal as a signed value, either 1 or 2 bytes based on is_long
-			// 2. Then, always store that result as signed 2 byte value
-			delta = (signed short)(is_long ? delta : (signed char)delta);
-		} else {
-			if (unsigned(snespos & ~0xFFFF) != (num & ~0xFFFF))
-				asar_throw_error(pass, error_type_block, error_id_bank_border_crossed,
-					"Relative address: Label {TODO} must be in the same bank.");
+    			// Tricky:
+    			// 1. Interpret our hex literal as a signed value, either 1 or 2 bytes based on is_long
+    			// 2. Then, always store that result as signed 2 byte value
+    			delta = (signed short)(is_long ? delta : (signed char)delta);
+    		} else {
+    			// Check bank FIRST before checking bounds
+    			if (unsigned(snespos & ~0xFFFF) != (num & ~0xFFFF))
+    				asar_throw_error(pass, error_type_block, error_id_bank_border_crossed, "Relative address: Label {TODO} must be in the same bank.");
 
-			if (!is_long && ((signed short)delta < -128 || (signed short)delta > 127))
-				asar_throw_error(pass, error_type_block, error_id_relative_branch_out_of_bounds,
-					dec(delta).data());
-		}
-	}
+    			// Mask delta to 16-bit for within-bank calculation
+    			delta = (signed short)(delta & 0xFFFF);
+
+    			if (!is_long && (delta < -128 || delta > 127))
+    				asar_throw_error(pass, error_type_block, error_id_relative_branch_out_of_bounds, dec(delta).data());
+    		}
+    	}
 
     int n = !is_long ? 1 : 2;
     // original macro
