@@ -17,11 +17,13 @@
 
 // randomdude999: remember to also update the .rc files (in res/windows/) when changing this.
 // Couldn't find a way to automate this without shoving the version somewhere in the CMake files
-extern const int asarver_maj=1;
-extern const int asarver_min=9;
-extern const int asarver_bug=0;
-extern const bool asarver_beta=true;
+const int asarver_maj=1;
+const int asarver_min=9;
+const int asarver_bug=1;
+const bool asarver_beta=false;
 bool default_math_pri=false;
+bool default_math_round_off=false;
+extern bool suppress_all_warnings;
 
 #ifdef _I_RELEASE
 extern char blockbetareleases[(!asarver_beta)?1:-1];
@@ -37,8 +39,10 @@ int pass;
 
 int optimizeforbank=-1;
 int optimize_dp = optimize_dp_flag::NONE;
+bool set_optimize_dp = false;
 int dp_base = 0;
 int optimize_address = optimize_address_flag::DEFAULT;
+bool set_optimize_address = false;
 
 string thisfilename;
 int thisline;
@@ -156,7 +160,17 @@ static int getlenforlabel(int insnespos, int thislabel, bool exists)
 		asar_throw_warning(1, warning_id_xkas_label_access);
 	unsigned int bank = thislabel>>16;
 	unsigned int word = thislabel&0xFFFF;
-	unsigned int relaxed_bank = optimizeforbank < 0 ? 0 : optimizeforbank;
+	unsigned int relaxed_bank;
+	if(optimizeforbank >= 0) {
+		relaxed_bank = optimizeforbank;
+	} else {
+		if((insnespos & 0xff000000) == 0) {
+			relaxed_bank = insnespos >> 16;
+		} else {
+			if(freespace_is_freecode) relaxed_bank = 0;
+			else relaxed_bank = 0x40;
+		}
+	}
 	if (!exists)
 	{
 		if (!freespaced) freespaceextra++;
@@ -171,33 +185,43 @@ static int getlenforlabel(int insnespos, int thislabel, bool exists)
 	{
 		return 1;
 	}
-	else if (optimize_address == optimize_address_flag::RAM && bank == 0x7E && word < 0x2000)
+	else if (
+		// if we should optimize ram accesses...
+		(optimize_address == optimize_address_flag::RAM || optimize_address == optimize_address_flag::MIRRORS)
+		// and we're in a bank with ram mirrors... (optimizeforbank=0x7E is checked later)
+		&& !(relaxed_bank & 0x40)
+		// and the label is in low RAM
+		&& bank == 0x7E && word < 0x2000)
 	{
 		return 2;
 	}
-	else if (optimize_address == optimize_address_flag::MIRRORS && (bank == relaxed_bank || (!(bank & 0x40) && !(relaxed_bank & 0x40))) && word < 0x2000)
-	{
-		return 2;
-	}
-	else if (optimize_address == optimize_address_flag::MIRRORS && !(bank & 0x40) && !(relaxed_bank & 0x40) && word < 0x8000)
+	else if (
+		// if we should optimize mirrors...
+		optimize_address == optimize_address_flag::MIRRORS
+		// we're in a bank with ram mirrors...
+		&& !(relaxed_bank & 0x40)
+		// and the label is in a mirrored section
+		&& !(bank & 0x40) && word < 0x8000)
 	{
 		return 2;
 	}
 	else if (optimizeforbank>=0)
 	{
+		// if optimizing for a specific bank:
+		// if the label is in freespace, never optimize
 		if ((unsigned int)thislabel&0xFF000000) return 3;
 		else if (bank==(unsigned int)optimizeforbank) return 2;
 		else return 3;
 	}
 	else if ((unsigned int)(thislabel|insnespos)&0xFF000000)
 	{
+		// optimize only if the label is in the same freespace
 		if ((unsigned int)(thislabel^insnespos)&0xFF000000) return 3;
 		else return 2;
 	}
 	else if ((thislabel^insnespos)&0xFF0000){ return 3; }
 	else { return 2;}
 }
-
 
 bool is_hex_constant(const char* str){
 	if (*str=='$')
@@ -498,9 +522,12 @@ void assembleline(const char * fname, int linenum, const char * line)
 	thisfilename = absolutepath;
 	thisline=linenum;
 	thisblock= nullptr;
+	single_line_for_tracker = 1;
 	try
 	{
-		string tmp=line;
+		string tmp;
+		if(inmacro && numif == numtrue) tmp = replace_macro_args(line);
+		else tmp = line;
 		clean(tmp);
 		string out;
 		if (numif==numtrue) resolvedefines(out, tmp);
@@ -530,6 +557,8 @@ void assembleline(const char * fname, int linenum, const char * line)
 					bool isspecialline = false;
 					if (thisblock[0] == '@')
 					{
+						asar_throw_warning(0, warning_id_feature_deprecated, "prefixing Asar commands with @ or ;@", "remove the @ or ;@ prefix");
+
 						isspecialline = true;
 						thisblock++;
 						while (is_space(*thisblock))
@@ -543,9 +572,13 @@ void assembleline(const char * fname, int linenum, const char * line)
 				catch (errblock&) {}
 				if (blocks[block][0]!='\0' && blocks[block][0]!='@') asarverallowed=false;
 			}
+			if(single_line_for_tracker == 1) single_line_for_tracker = 0;
 		}
 		if(fakeendif)
 		{
+			thisline = linenum;
+			thisblock = blocks[0];
+			asar_throw_warning(0, warning_id_feature_deprecated, "inline if statements without endif", "Add an \" : endif\" at the end of the line");
 			if (numif==numtrue) numtrue--;
 			numif--;
 		}
@@ -615,6 +648,14 @@ void assemblefile(const char * filename, bool toplevel)
 			comment = strqchr(comment, ';');
 			while (comment != nullptr)
 			{
+				const char* comment_end = comment + strlen(comment);
+				if (comment_end - comment >= 2
+					&& comment[1] == '[' && comment[2] == '['
+					&& (comment_end[-1] != ']' || comment_end[-2] != ']'))
+				{
+					asar_throw_warning(0, warning_id_feature_deprecated, "comments starting with ;[[", "\";[[\" marks the start of a block comments in Asar 2.0 - either remove the \"[[\", or make sure the commented line ends on \"]]\"");
+				}
+
 				if (comment[1]!='@')
 				{
 					comment[0]='\0';
@@ -647,7 +688,7 @@ void assemblefile(const char * filename, bool toplevel)
 	} else { // filecontents.exists(absolutepath)
 		file = filecontents.find(absolutepath);
 	}
-	bool inmacro=false;
+	bool in_macro_def=false;
 	asarverallowed=true;
 	for (int i=0;file.contents[i] && i<file.numlines;i++)
 	{
@@ -659,17 +700,19 @@ void assemblefile(const char * filename, bool toplevel)
 			istoplevel=toplevel;
 			if (stribegin(file.contents[i], "macro ") && numif==numtrue)
 			{
-				if (inmacro) asar_throw_error(0, error_type_line, error_id_nested_macro_definition);
-				inmacro=true;
+				// RPG Hacker: Commented out for Asar 1.81 backwards-compatibility.
+				// (From Asar 2.0 onwards, nested macro definitions will be well-defined).
+				if (in_macro_def /*|| inmacro*/) asar_throw_error(0, error_type_line, error_id_nested_macro_definition);
+				in_macro_def=true;
 				if (!pass) startmacro(file.contents[i]+6);
 			}
 			else if (!stricmp(file.contents[i], "endmacro") && numif==numtrue)
 			{
-				if (!inmacro) asar_throw_error(0, error_type_line, error_id_misplaced_endmacro);
-				inmacro=false;
+				if (!in_macro_def) asar_throw_error(0, error_type_line, error_id_misplaced_endmacro);
+				in_macro_def=false;
 				if (!pass) endmacro(true);
 			}
-			else if (inmacro)
+			else if (in_macro_def)
 			{
 				if (!pass) tomacro(file.contents[i]);
 			}
@@ -681,7 +724,7 @@ void assemblefile(const char * filename, bool toplevel)
 				assembleline(absolutepath, i, connectedline);
 				thisfilename = absolutepath;
 				i += skiplines;
-				if (numif != prevnumif && whilestatus[numif].iswhile && whilestatus[numif].cond)
+				if ((numif != prevnumif || single_line_for_tracker == 3) && (whilestatus[numif].iswhile || whilestatus[numif].is_for) && whilestatus[numif].cond)
 					i = whilestatus[numif].startline - 1;
 			}
 		}
@@ -689,7 +732,7 @@ void assemblefile(const char * filename, bool toplevel)
 	}
 	thisline++;
 	thisblock= nullptr;
-	if (inmacro)
+	if (in_macro_def)
 	{
 		asar_throw_error(0, error_type_null, error_id_unclosed_macro);
 		if (!pass) endmacro(false);
@@ -966,9 +1009,10 @@ void reseteverything()
 	errored = false;
 	checksum_fix_enabled = true;
 	force_checksum_fix = false;
+
+	default_math_pri = false;
+	default_math_round_off = false;
+	suppress_all_warnings = false;
 	
-	#ifndef ASAR_SHARED
-		free(const_cast<unsigned char*>(romdata_r));
-	#endif
 #undef free
 }

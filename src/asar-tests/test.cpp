@@ -28,6 +28,7 @@
 #	include <algorithm>
 #	include <set>
 #	include <list>
+#	include <errno.h>
 
 #	if defined(_MSC_VER)
 #		pragma warning(pop)
@@ -43,7 +44,10 @@
 #	include <sys/stat.h>
 #	include <set>
 #	include <list>
+#	include <errno.h>
 #endif
+
+#include <cstdint>
 
 #if defined(ASAR_TEST_DLL)
 #	include "asardll.h"
@@ -240,12 +244,21 @@ static void delete_file(const char * filename)
 #endif
 }
 
+static void create_directory(const char * dirname)
+{
+#ifdef _WIN32
+	CreateDirectory(dirname, NULL);
+#else
+	mkdir(dirname, 0777);
+#endif
+}
+
 
 #if !defined(ASAR_TEST_DLL)
 // RPG Hacker: Original test application used system(), but
 // that really made my anti-virus sad, so here is a new,
 // complicated platform-specific solution.
-// NOTE: No cont char*, for commandline, because CreateProcess()
+// NOTE: No const char*, for commandline, because CreateProcess()
 // actually can mess with this string for some reason...
 static bool execute_command_line(char * commandline, const char * stdout_log_file, const char * stderr_log_file)
 {
@@ -261,7 +274,10 @@ static bool execute_command_line(char * commandline, const char * stdout_log_fil
 	sa.bInheritHandle = TRUE;
 	sa.lpSecurityDescriptor = nullptr;
 
-	if (!CreatePipe(&stdout_read_handle, &stdout_write_handle, &sa, 0))
+	SYSTEM_INFO sInfo{};
+	GetSystemInfo(&sInfo);
+
+	if (!CreatePipe(&stdout_read_handle, &stdout_write_handle, &sa, sInfo.dwPageSize * 4))
 	{
 		return false;
 	}
@@ -273,7 +289,7 @@ static bool execute_command_line(char * commandline, const char * stdout_log_fil
 		return false;
 	}
 
-	if (!CreatePipe(&stderr_read_handle, &stderr_write_handle, &sa, 0))
+	if (!CreatePipe(&stderr_read_handle, &stderr_write_handle, &sa, sInfo.dwPageSize * 4))
 	{
 		CloseHandle(stdout_read_handle);
 		CloseHandle(stdout_write_handle);
@@ -489,6 +505,8 @@ int main(int argc, char * argv[])
 	{
 		has_path_seperator = true;
 	}
+	// make sure output directory exists
+	create_directory(output_directory);
 
 
 	int numfailed = 0;
@@ -504,11 +522,11 @@ int main(int argc, char * argv[])
 	{
 		char * fname = input_files[testno].file_path;
 
-		char out_rom_name[512];
+		char out_rom_name[256];
 		snprintf(out_rom_name, sizeof(out_rom_name), "%s%s%s%s", output_directory, (has_path_seperator ? "" : "/"), input_files[testno].file_name, ".sfc");
-		char stdout_log_name[512];
+		char stdout_log_name[256];
 		snprintf(stdout_log_name, sizeof(stdout_log_name), "%s%s%s%s", output_directory, (has_path_seperator ? "" : "/"), input_files[testno].file_name, ".stdout.log");
-		char stderr_log_name[512];
+		char stderr_log_name[256];
 		snprintf(stderr_log_name, sizeof(stderr_log_name), "%s%s%s%s", output_directory, (has_path_seperator ? "" : "/"), input_files[testno].file_name, ".stderr.log");
 
 		// Delete files if they already exist, so we don't get leftovers from a previous testrun
@@ -528,11 +546,12 @@ int main(int argc, char * argv[])
 		int pos = 0;
 		int len = 0;
 		FILE * rom = fopen(out_rom_name, "wb");
+		if (!rom) dief("Error: '%s' could not be opened for writing: %s", out_rom_name, strerror(errno));
 
 		int numiter = 1;
 
-		std::vector<int> expected_errors;
-		std::vector<int> expected_warnings;
+		std::vector<std::string> expected_errors;
+		std::vector<std::string> expected_warnings;
 		std::vector<std::string> expected_prints;
 		std::vector<std::string> expected_error_prints;
 		std::vector<std::string> expected_warn_prints;
@@ -601,30 +620,16 @@ int main(int argc, char * argv[])
 					if (strncmp(cur_word.c_str(), token, strlen(token)) == 0)
 					{
 						const char* idstr = cur_word.c_str() + strlen(token);
-						char* endpos = nullptr;
-						long int id = strtol(idstr, &endpos, 10);
 
-						if (endpos == nullptr || *endpos != '\0')
-						{
-							dief("Error: Invalid %s declaration!\n", token);
-						}
-
-						expected_errors.push_back((int)id);
+						expected_errors.push_back(idstr-1);
 					}
 
 					token = "warnW";
 					if (strncmp(cur_word.c_str(), token, strlen(token)) == 0)
 					{
 						const char* idstr = cur_word.c_str() + strlen(token);
-						char* endpos = nullptr;
-						long int id = strtol(idstr, &endpos, 10);
 
-						if (endpos == nullptr || *endpos != '\0')
-						{
-							dief("Error: Invalid %s declaration!\n", token);
-						}
-
-						expected_warnings.push_back((int)id);
+						expected_warnings.push_back(idstr-1);
 					}
 
 					if (pos > len) len = pos;
@@ -821,8 +826,8 @@ int main(int argc, char * argv[])
 		FILE * out = nullptr;
 #endif
 
-		std::vector<int> actual_errors;
-		std::vector<int> actual_warnings;
+		std::vector<std::string> actual_errors;
+		std::vector<std::string> actual_warnings;
 		std::vector<std::string> actual_prints;
 		std::vector<std::string> actual_error_prints;
 		std::vector<std::string> actual_warn_prints;
@@ -848,20 +853,20 @@ int main(int argc, char * argv[])
 					size_t found = log_line.find(token);
 					if (found != std::string::npos)
 					{
-						char* endpos = nullptr;
-						long int num = strtol(log_line.c_str() + found + strlen(token), &endpos, 10);
+						size_t found_end = log_line.find(')', found + 1);
 
-						if (endpos == nullptr || *endpos != ')')
+						if (found_end == std::string::npos)
 						{
-							dief("Error: Failed parsing error code from Asar output!\n");
+							dief("Error: Failed parsing error name from Asar output!\n");
 						}
 
-						actual_errors.push_back(num);
+						size_t start_pos = found + strlen(token) - 1;
+						actual_errors.push_back(log_line.substr(start_pos, found_end - start_pos));
 
 						// RPG Hacker: Check if it's the error command. If so, we also need to add a print as well.
 						{
 							std::string command_token = ": error command: ";
-							std::string remainder = endpos;
+							std::string remainder = log_line.substr(found_end+1);
 							size_t command_found = remainder.find(command_token);
 
 							if (command_found != std::string::npos)
@@ -874,7 +879,7 @@ int main(int argc, char * argv[])
 						{
 							std::string command_token_1 = ": Assertion failed: ";
 							std::string command_token_2 = " [assert ";
-							std::string remainder = endpos;
+							std::string remainder = log_line.substr(found_end + 1);
 							size_t command_found_1 = remainder.find(command_token_1);
 							size_t command_found_2 = remainder.find(command_token_2);
 
@@ -892,20 +897,20 @@ int main(int argc, char * argv[])
 					found = log_line.find(token);
 					if (found != std::string::npos)
 					{
-						char* endpos = nullptr;
-						long int num = strtol(log_line.c_str() + found + strlen(token), &endpos, 10);
+						size_t found_end = log_line.find(')', found + 1);
 
-						if (endpos == nullptr || *endpos != ')')
+						if (found_end == std::string::npos)
 						{
 							dief("Error: Failed parsing warning code from Asar output!\n");
 						}
 
-						actual_warnings.push_back(num);
+						size_t start_pos = found + strlen(token) - 1;
+						actual_warnings.push_back(log_line.substr(start_pos, found_end - start_pos));
 
 						// RPG Hacker: Check if it's the warn command. If so, we also need to add a print as well.
 						{
 							std::string command_token = ": warn command: ";
-							std::string remainder = endpos;
+							std::string remainder = log_line.substr(found_end + 1);
 							size_t command_found = remainder.find(command_token);
 
 							if (command_found != std::string::npos)
@@ -997,28 +1002,28 @@ int main(int argc, char * argv[])
 			printf("\nExpected errors: ");
 			for (auto it = expected_errors.begin(); it != expected_errors.end(); ++it)
 			{
-				printf("%sE%d", (it != expected_errors.begin() ? "," : ""), *it);
+				printf("%s%s", (it != expected_errors.begin() ? "," : ""), it->c_str());
 			}
 			printf("\n");
 
 			printf("Actual errors: ");
 			for (auto it = actual_errors.begin(); it != actual_errors.end(); ++it)
 			{
-				printf("%sE%d", (it != actual_errors.begin() ? "," : ""), *it);
+				printf("%s%s", (it != actual_errors.begin() ? "," : ""), it->c_str());
 			}
 			printf("\n");
 
 			printf("\nExpected warnings: ");
 			for (auto it = expected_warnings.begin(); it != expected_warnings.end(); ++it)
 			{
-				printf("%sW%d", (it != expected_warnings.begin() ? "," : ""), *it);
+				printf("%s%s", (it != expected_warnings.begin() ? "," : ""), it->c_str());
 			}
 			printf("\n");
 
 			printf("Actual warnings: ");
 			for (auto it = actual_warnings.begin(); it != actual_warnings.end(); ++it)
 			{
-				printf("%sW%d", (it != actual_warnings.begin() ? "," : ""), *it);
+				printf("%s%s", (it != actual_warnings.begin() ? "," : ""), it->c_str());
 			}
 			printf("\n");
 
@@ -1065,7 +1070,7 @@ int main(int argc, char * argv[])
 		fclose(rom);
 #endif
 		bool fail = false;
-		for (int i = 0;i < min(len, truelen);i++)
+		for (int i = 0;i < min(len, truelen); i++)
 		{
 			if (truerom[i] != expectedrom[i] && !(i >= 0x07FDC && i <= 0x07FDF && (expectedrom[i] == 0x00 || expectedrom[i] == smwrom[i])))
 			{
@@ -1084,6 +1089,10 @@ int main(int argc, char * argv[])
 
 	free(smwrom);
 
+#if defined(ASAR_TEST_DLL)
+	asar_close();
+#endif
+
 	printf("%u out of %u performed tests succeeded.\n", (unsigned int)(input_files.size() - (size_t)numfailed), (unsigned int)input_files.size());
 
 	if (numfailed > 0)
@@ -1091,10 +1100,6 @@ int main(int argc, char * argv[])
 		printf("Some tests failed!\n");
 		return 1;
 	}
-
-#if defined(ASAR_TEST_DLL)
-	asar_close();
-#endif
 
 	return 0;
 }

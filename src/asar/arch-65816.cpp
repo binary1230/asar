@@ -16,48 +16,12 @@ void asend_65816()
 {
 }
 
-// TODO: maybe rehome this to a less CPU-specific place, if it's the same for other arch's like spc
-//
-// is_long: if true, 16bit mode (i.e. BRL). if false, 8bit mode (i.e. BRA)
-void relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long)
-{
-	int delta = (int)num;
-	if (foundlabel)
-		delta -= snespos + (is_long ? 3 : 2);
-
-	if (pass == 2) {
-		// TODO: need to check if we need to do any of this stuff on passes other than 2 -Dom
-
-		if (!foundlabel) {
-			if (delta & ~(is_long ? 0xFFFF : 0xFF))
-				asar_throw_error(pass, error_type_block, error_id_invalid_input,
-					(string("Relative address operand too large: ") + hex4((unsigned)delta)).data());
-
-			// Tricky:
-			// 1. Interpret our hex literal as a signed value, either 1 or 2 bytes based on is_long
-			// 2. Then, always store that result as signed 2 byte value
-			delta = (signed short)(is_long ? delta : (signed char)delta);
-		} else {
-			if (unsigned(snespos & ~0xFFFF) != (num & ~0xFFFF))
-				asar_throw_error(pass, error_type_block, error_id_bank_border_crossed,
-					"Relative address: Label {TODO} must be in the same bank.");
-
-			if (!is_long && ((signed short)delta < -128 || (signed short)delta > 127))
-				asar_throw_error(pass, error_type_block, error_id_relative_branch_out_of_bounds,
-					dec(delta).data());
-		}
-	}
-
-	write1(instruction);
-	if (is_long)
-		write2((unsigned)delta);
-	else
-		write1((unsigned)(signed char)delta);
-}
+void relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long);
 
 extern bool fastrom;
+extern int recent_opcode_num;
 
-bool asblock_65816(char** word, int numwords)
+bool asblock_65816(char** word, int numwords, bool fake, int& outlen)
 {
 #define is(test) (!stricmpwithupper(word[0], test))
 //#define par word[1]
@@ -68,25 +32,26 @@ bool asblock_65816(char** word, int numwords)
 	bool explicitlen = false;
 	bool hexconstant = false;
 	if(0);
-#define getvars(optbank) num=(pass!=0)?getnum(par):0; hexconstant=is_hex_constant(par); if (word[0][3]=='.') { len=getlenfromchar(word[0][4]); explicitlen=true; word[0][3]='\0'; } else {len=getlen(par, optbank); explicitlen=false;}
+#define getvars(optbank) num=(pass==2 && !fake)?getnum(par):0; hexconstant=is_hex_constant(par); if (word[0][3]=='.') { len=getlenfromchar(word[0][4]); explicitlen=true; word[0][3]='\0'; } else {len=getlen(par, optbank); explicitlen=false;}
 #define match(left, right) (word[1] && stribegin(par, left) && striend(par, right))
 #define init(left, right) strip_suffix(par, right); strip_prefix(par, left); getvars(false)
 #define init_index(left, right) itrim(par, left, right); getvars(false)
 #define bankoptinit(left) strip_prefix(par, left); getvars(true)
 #define blankinit() len=1; explicitlen=false; num=0
 #define end() return false
-#define as0(    op, byte) if (is(op)          ) { write1((unsigned int)byte);              return true; }
-#define as1(    op, byte) if (is(op) && len==1) { write1((unsigned int)byte); write1(num); return true; }
-#define as2(    op, byte) if (is(op) && len==2) { write1((unsigned int)byte); write2(num); return true; } \
+#define withlen(n) outlen=n; if(fake) return true
+#define as0(    op, byte) if (is(op)          ) { withlen(0); write1((unsigned int)byte);              return true; }
+#define as1(    op, byte) if (is(op) && len==1) { withlen(1); write1((unsigned int)byte); write1(num); return true; }
+#define as2(    op, byte) if (is(op) && (len==2 || (!explicitlen && len<2))) { withlen(2); write1((unsigned int)byte); write2(num); return true; } \
 													/*if (is(op) && len==3 && emulate) { write1(byte); write2(num); return true; }*/
-#define as3(    op, byte) if (is(op) && len==3) { write1((unsigned int)byte); write3(num); return true; }
+#define as3(    op, byte) if (is(op) && (len==3 || (!explicitlen && len<3))) { withlen(3); write1((unsigned int)byte); write3(num); return true; }
 //#define as23(   op, byte) if (is(op) && (len==2 || len==3)) { write1(byte); write2(num); return true; }
-#define as32(   op, byte) if (is(op) && ((len==2 && !explicitlen) || len==3)) { write1((unsigned int)byte); write3(num); return true; }
-#define as_a(   op, byte) if (is(op)) { if(!explicitlen && !hexconstant) asar_throw_warning(0, warning_id_implicitly_sized_immediate); if (len==1) { write1(byte); write1(num); } \
-																					 else { write1((unsigned int)byte); write2(num); } return true; }
-#define as_xy(  op, byte) if (is(op)) { if(!explicitlen && !hexconstant) asar_throw_warning(0, warning_id_implicitly_sized_immediate); if (len==1) { write1(byte); write1(num); } \
-																					 else {  write1((unsigned int)byte); write2(num); } return true; }
-#define as_rep( op, byte) if (is(op)) { if (pass==0) { num=getnum(par); } if(foundlabel) asar_throw_error(0, error_type_block, error_id_no_labels_here); for (unsigned int i=0;i<num;i++) { write1((unsigned int)byte); } return true; }
+#define as32(   op, byte) if (is(op) && ((len<3 && !explicitlen) || len==3)) { withlen(3); write1((unsigned int)byte); write3(num); return true; }
+#define as_a(   op, byte) if (is(op)) { if(!explicitlen && !hexconstant && !fake) asar_throw_warning(0, warning_id_implicitly_sized_immediate); if (len==1) { withlen(1); write1(byte); write1(num); } \
+																					 else { withlen(2); write1((unsigned int)byte); write2(num); } return true; }
+#define as_xy(  op, byte) if (is(op)) { if(!explicitlen && !hexconstant && !fake) asar_throw_warning(0, warning_id_implicitly_sized_immediate); if (len==1) { withlen(1); write1(byte); write1(num); } \
+																					 else { withlen(2); write1((unsigned int)byte); write2(num); } return true; }
+#define as_rep( op, byte) if (is(op)) { if (pass<2 && !fake) { num=getnum(par); } if(foundlabel) asar_throw_error(0, error_type_block, error_id_no_labels_here); withlen(0); for (unsigned int i=0;i<num;i++) { write1((unsigned int)byte); } recent_opcode_num = num; return true; }
 #define as_rel1(op, byte) if (is(op)) { relative_addr(byte, num, false); return true; }
 #define as_rel2(op, byte) if (is(op)) { relative_addr(byte, num, true);  return true; }
 #define the8(offset, len) as##len("ORA", offset+0x00); as##len("AND", offset+0x20); as##len("EOR", offset+0x40); as##len("ADC", offset+0x60); \
@@ -167,10 +132,10 @@ bool asblock_65816(char** word, int numwords)
 	else if (match("", ",x"))
 	{
 		init_index("", ",x");
-		if (match("(", ")") && confirmqpar(substr(word[1] + 1, (int)(strlen(word[1] + 1) - 2 - 1)))) asar_throw_warning(0, warning_id_65816_yy_x_does_not_exist);
-		the8(0x1F, 3);
-		the8(0x1D, 2);
+		if (match("(", ")") && confirmqpar(substr(word[1] + 1, (int)(strlen(word[1] + 1) - 2 - 1)))&& !fake) asar_throw_warning(0, warning_id_65816_yy_x_does_not_exist);
 		the8(0x15, 1);
+		the8(0x1D, 2);
+		the8(0x1F, 3);
 		thenext8(0x16, 1);
 		thenext8(0x1E, 2);
 		as1("STZ", 0x74);
@@ -187,7 +152,7 @@ bool asblock_65816(char** word, int numwords)
 		as2("LDX", 0xBE);
 		if (len==1 && (is("ORA") || is("AND") || is("EOR") || is("ADC") || is("STA") || is("LDA") || is("CMP") || is("SBC")))
 		{
-			asar_throw_warning(0, warning_id_65816_xx_y_assume_16_bit, word[0]);
+			if(!fake) asar_throw_warning(0, warning_id_65816_xx_y_assume_16_bit, word[0]);
 			len=2;
 		}
 		the8(0x19, 2);
@@ -201,17 +166,21 @@ bool asblock_65816(char** word, int numwords)
 			autoptr<char**>param=qpsplit(par.temp_raw(), ",", &numargs);
 			if (numargs ==2)
 			{
+				withlen(2);
 				write1(is("MVN")?(unsigned int)0x54:(unsigned int)0x44);
-				write1(getnum(param[0]));
-				write1(getnum(param[1]));
+				write1(pass==2?getnum(param[0]):0);
+				write1(pass==2?getnum(param[1]):0);
 				return true;
 			}
+			getvars(false);
+			if(len != 2) return false;
 		}
 		if (false)
 		{
 opAFallback:
 			snes_label tmp;
 			if (pass && !labelval(par, &tmp)) return false;
+			if(!fake) asar_throw_warning(1, warning_id_feature_deprecated, "using A as a label name", "rename your label to _a or something, or use a+0 to disambiguate the addressing mode");
 			len=getlen(par);
 			num=tmp.pos;
 		}
@@ -226,9 +195,9 @@ opAFallback:
 		{
 			getvars(false)
 		}
-		the8(0x0F, 3);
-		the8(0x0D, 2);
 		the8(0x05, 1);
+		the8(0x0D, 2);
+		the8(0x0F, 3);
 		thenext8(0x06, 1);
 		thenext8(0x0E, 2);
 		thefinal7(0x04, 1);
@@ -244,7 +213,7 @@ opAFallback:
 		as2("PEA", 0xF4);
 		if (emulatexkas)
 		{
-			asar_throw_warning(0, warning_id_feature_deprecated, "usage of jmp instead of jml ", "use jml instead");
+			if(!fake) asar_throw_warning(0, warning_id_feature_deprecated, "usage of jmp instead of jml ", "use jml instead");
 			as3("JMP", 0x5C);//all my hate
 			//as3("JSR", 0x22);
 		}
@@ -262,4 +231,45 @@ opAFallback:
 		end();
 	}
 	return true;
+}
+
+// TODO: maybe rehome this to a less CPU-specific place, if it's the same for other arch's like spc
+//
+// is_long: if true, 16bit mode (i.e. BRL). if false, 8bit mode (i.e. BRA)
+void relative_addr(const unsigned int instruction, const unsigned int num, const bool is_long)
+{
+	int delta = (int)num;
+	if (foundlabel)
+		delta -= snespos + (is_long ? 3 : 2);
+
+	if (pass == 2) {
+		// TODO: need to check if we need to do any of this stuff on passes other than 2 -Dom
+
+		if (!foundlabel) {
+			if (delta & ~(is_long ? 0xFFFF : 0xFF))
+				asar_throw_error(pass, error_type_block, error_id_invalid_input,
+					(string("Relative address operand too large: ") + hex4((unsigned)delta)).data());
+
+			// Tricky:
+			// 1. Interpret our hex literal as a signed value, either 1 or 2 bytes based on is_long
+			// 2. Then, always store that result as signed 2 byte value
+			delta = (signed short)(is_long ? delta : (signed char)delta);
+		} else {
+			if (unsigned(snespos & ~0xFFFF) != (num & ~0xFFFF))
+				asar_throw_error(pass, error_type_block, error_id_bank_border_crossed,
+					"Relative address: Label {TODO} must be in the same bank.");
+
+			if (!is_long && ((signed short)delta < -128 || (signed short)delta > 127))
+				asar_throw_error(pass, error_type_block, error_id_relative_branch_out_of_bounds,
+					dec(delta).data());
+		}
+	}
+
+	withlen(is_long ? 1 : 2);
+
+	write1(instruction);
+	if (is_long)
+		write2((unsigned)delta);
+	else
+		write1((unsigned)(signed char)delta);
 }

@@ -7,6 +7,7 @@
 #include "interface-shared.h"
 
 static int asar_num_warnings = 0;
+bool suppress_all_warnings = false;
 
 struct asar_warning_mapping
 {
@@ -89,6 +90,7 @@ static asar_warning_mapping asar_warnings[] =
 	{ WRN(feature_deprecated), "DEPRECATION NOTIFICATION: Feature \"%s\" is deprecated and will be REMOVED in the future. Please update your code to conform to newer styles. Suggested work around: %s." },
 
 	{ WRN(byte_order_mark_utf8), "UTF-8 byte order mark detected and skipped." },
+	{ WRN(optimization_settings), "In Asar 2.0, the default optimization settings will change to `optimize dp always` and `optimize address mirrors`, which changes this instruction's argument from %d to %d bytes. Either specify the desired settings manually or use explicit length suffixes to silence this warning." },
 };
 
 // RPG Hacker: Sanity check. This makes sure that the element count of asar_warnings
@@ -98,7 +100,7 @@ static_assert(sizeof(asar_warnings) / sizeof(asar_warnings[0]) == warning_id_cou
 
 void asar_throw_warning(int whichpass, asar_warning_id warnid, ...)
 {
-	if (pass == whichpass)
+	if (pass == whichpass && !suppress_all_warnings)
 	{
 		assert(warnid > warning_id_start && warnid < warning_id_end);
 
@@ -130,6 +132,15 @@ void asar_throw_warning(int whichpass, asar_warning_id warnid, ...)
 	}
 }
 
+const char* get_warning_name(asar_warning_id warnid)
+{
+	assert(warnid > warning_id_start && warnid < warning_id_end);
+
+	const asar_warning_mapping& warning = asar_warnings[warnid - warning_id_start - 1];
+
+	return warning.name;
+}
+
 
 
 void set_warning_enabled(asar_warning_id warnid, bool enabled)
@@ -141,7 +152,7 @@ void set_warning_enabled(asar_warning_id warnid, bool enabled)
 	warning.enabled = enabled;
 }
 
-asar_warning_id parse_warning_id_from_string(const char* string)
+asar_warning_id parse_warning_id_from_string(const char* string, int warn_pass)
 {
 	const char* pos = string;
 
@@ -177,7 +188,7 @@ asar_warning_id parse_warning_id_from_string(const char* string)
 		return warning_id_end;
 	}
 
-	asar_throw_warning(1, warning_id_feature_deprecated, "Numerical warnings", "Please transition to Wwarning_name");
+	asar_throw_warning(warn_pass, warning_id_feature_deprecated, "Numerical warnings", "Please transition to Wwarning_name");
 	return warnid;
 }
 

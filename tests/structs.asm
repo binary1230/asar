@@ -1,9 +1,15 @@
 ;`AD 07 00 AD 02 00 AD 02 00 DC 00 00 DC 07 00 A9 40 00 8D 25 43
 ;`02 03 05 07 03 05 02 05
-;`warnW1030
-;`warnW1030
-;`warnW1030
-;`warnW1030
+;`warnWfeature_deprecated
+;`warnWfeature_deprecated
+;`02 40
+;`00 40
+;`04 40
+
+struct struct_without_org $4000
+	.first: skip 2
+	.second: skip 2
+endstruct
 
 org $008000
 
@@ -18,6 +24,12 @@ endstruct
 struct test3 extends test
 	.lol: skip 5
 endstruct
+
+struct test2 extends struct_without_org
+endstruct
+
+optimize address default
+optimize dp none
 
 lda test[1].size
 ;lda test.size
@@ -66,3 +78,7 @@ db objectsize(test.test3)
 ; Seems a bit buggy, but I couldn't find anything out, and really don't care enough.
 db sizeof("test")
 db objectsize("test.test3")
+
+dw struct_without_org.second
+dw struct_without_org
+dw struct_without_org.test2

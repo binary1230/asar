@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 #if defined(_WIN32)
 #	if defined(_MSC_VER)
@@ -140,6 +141,7 @@ static bool asar_init_shared(void)
 	load(getlabelval);
 	load(getdefine);
 	load(getalldefines);
+	load(resolvedefines);
 	load(math);
 	load(getwrittenblocks);
 	load(getmapper);

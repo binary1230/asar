@@ -59,18 +59,21 @@ enum asar_warning_id : int
 
 	warning_id_byte_order_mark_utf8,
 
+	warning_id_optimization_settings,
+
 	warning_id_end,
 	warning_id_count = warning_id_end - warning_id_start - 1
 };
 
 void asar_throw_warning(int whichpass, asar_warning_id warnid, ...);
+const char* get_warning_name(asar_warning_id warnid);
 
 void set_warning_enabled(asar_warning_id warnid, bool enabled);
 
 // Supported string format: wXXXX, WXXXX or XXXX.
 // Returns warning_id_end if the string is malformed
 // or the ID wasn't found.
-asar_warning_id parse_warning_id_from_string(const char* string);
+asar_warning_id parse_warning_id_from_string(const char* string, int warn_pass = 0);
 
 void reset_warnings_to_default();
 

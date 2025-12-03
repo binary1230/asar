@@ -12,13 +12,14 @@ const unsigned char * romdata= nullptr; // NOTE: Changed into const to prevent d
 int romlen;
 static bool header;
 static FILE * thisfile;
+unsigned char default_freespacebyte;
 
 asar_error_id openromerror;
 
 autoarray<writtenblockdata> writtenblocks;
 
 // RPG Hacker: Uses binary search to find the insert position of our ROM write
-#ifdef ASAR_SHARED
+#if defined(ASAR_SHARED) || defined(ASAR_STATIC)
 static int findromwritepos(int snesoffset, int searchstartpos, int searchendpos)
 {
 	if (searchendpos == searchstartpos)
@@ -39,6 +40,7 @@ static int findromwritepos(int snesoffset, int searchstartpos, int searchendpos)
 
 static void addromwriteforbank(int snesoffset, int numbytes)
 {
+	if (numbytes == 0) return;
 	int currentbank = (snesoffset & 0xFF0000);
 
 	int insertpos = findromwritepos(snesoffset, 0, writtenblocks.count);
@@ -109,7 +111,7 @@ static void addromwrite(int pcoffset, int numbytes)
 void writeromdata(int pcoffset, const void * indata, int numbytes)
 {
 	memcpy(const_cast<unsigned char*>(romdata) + pcoffset, indata, (size_t)numbytes);
-	#ifdef ASAR_SHARED
+	#if defined(ASAR_SHARED) || defined(ASAR_STATIC)
 		addromwrite(pcoffset, numbytes);
 	#endif
 }
@@ -117,16 +119,17 @@ void writeromdata(int pcoffset, const void * indata, int numbytes)
 void writeromdata_byte(int pcoffset, unsigned char indata)
 {
 	memcpy(const_cast<unsigned char*>(romdata) + pcoffset, &indata, 1);
-	#ifdef ASAR_SHARED
+	#if defined(ASAR_SHARED) || defined(ASAR_STATIC)
 		addromwrite(pcoffset, 1);
 	#endif
 }
 
-void writeromdata_bytes(int pcoffset, unsigned char indata, int numbytes)
+void writeromdata_bytes(int pcoffset, unsigned char indata, int numbytes, bool add_write)
 {
 	memset(const_cast<unsigned char*>(romdata) + pcoffset, indata, (size_t)numbytes);
-	#ifdef ASAR_SHARED
-		addromwrite(pcoffset, numbytes);
+	#if defined(ASAR_SHARED) || defined(ASAR_STATIC)
+		if(add_write)
+			addromwrite(pcoffset, numbytes);
 	#endif
 }
 
@@ -263,17 +266,20 @@ int getpcfreespace(int size, bool isforcode, bool autoexpand, bool respectbankbo
 			if(0);
 			else if (romlen==0x080000)
 			{
+				writeromdata_bytes(romlen, default_freespacebyte, 0x100000 - romlen, false);
 				romlen=0x100000;
 				writeromdata_byte(snestopc(0x00FFD7), 0x0A);
 			}
 			else if (romlen==0x100000)
 			{
+				writeromdata_bytes(romlen, default_freespacebyte, 0x200000 - romlen, false);
 				romlen=0x200000;
 				writeromdata_byte(snestopc(0x00FFD7), 0x0B);
 			}
 			else if (isforcode) return -1;//no point creating freespace that can't be used
 			else if (romlen==0x200000 || romlen==0x300000)
 			{
+				writeromdata_bytes(romlen, default_freespacebyte, 0x400000 - romlen, false);
 				romlen=0x400000;
 				writeromdata_byte(snestopc(0x00FFD7), 0x0C);
 			}
@@ -340,6 +346,7 @@ int getpcfreespace(int size, bool isforcode, bool autoexpand, bool respectbankbo
 		if (autoexpand && nextbank>=0)
 		{
 			unsigned char x7FD7[]={0, 0x0A, 0x0B, 0x0C, 0x0C, 0x0D, 0x0D, 0x0D, 0x0D};
+			writeromdata_bytes(romlen, default_freespacebyte, nextbank + 0x100000 - romlen, false);
 			romlen=nextbank+0x100000;
 			writeromdata_byte(0x7FD7, x7FD7[romlen>>20]);
 			autoexpand=false;
@@ -438,6 +445,11 @@ bool openrom(const char * filename, bool confirm)
 		openromerror = header ? error_id_open_rom_not_smw_extension : error_id_open_rom_not_smw_header;
 		return false;
 	}
+
+	romdata_r=(unsigned char*)malloc((size_t)romlen);
+	romlen_r=romlen;
+	memcpy((void*)romdata_r, romdata, (size_t)romlen);//recently allocated, dead
+
 	return true;
 }
 
@@ -464,8 +476,10 @@ uint32_t closerom(bool save)
 	}
 	if (thisfile) fclose(thisfile);
 	if (romdata) free(const_cast<unsigned char*>(romdata));
+	if (romdata_r) free(const_cast<unsigned char*>(romdata_r));
 	thisfile= nullptr;
 	romdata= nullptr;
+	romdata_r = nullptr;
 	romlen=0;
 	return romCrc;
 }
